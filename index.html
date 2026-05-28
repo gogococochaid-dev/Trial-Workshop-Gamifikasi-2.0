@@ -493,7 +493,8 @@
             currentIndex: 0,
             score: 50,
             answersHistory: [],
-            audioMuted: false
+            audioMuted: false,
+            startTime: null // TAMBAHAN: Untuk merekam durasi permainan
         };
 
         // --- WEB AUDIO API (Synthesizer) ---
@@ -606,6 +607,10 @@
         function startGame() {
             switchScreen('screen-game');
             playBGM();
+            
+            // TAMBAHAN: Rekam waktu saat permainan dimulai (dalam milidetik)
+            state.startTime = Date.now(); 
+            
             questions.sort(() => Math.random() - 0.5); // Shuffle
             loadCard();
         }
@@ -808,6 +813,10 @@
             setTimeout(() => {
                 switchScreen('screen-debrief');
                 generateReport();
+                
+                // TAMBAHAN: Memicu pengiriman data ke Google Sheets di akhir game
+                sendGameDataToGoogleSheets();
+                
             }, 500);
         }
 
@@ -854,6 +863,69 @@
                 `;
                 listContainer.appendChild(div);
             });
+        }
+
+        // --- GOOGLE SHEETS INTEGRATION (HTTP POST API) ---
+        async function sendGameDataToGoogleSheets() {
+            // 1. Kalkulasi metrik yang dibutuhkan
+            const totalBenar = state.answersHistory.filter(a => a.isCorrect).length;
+            
+            // Menentukan Kategori Pencapaian sesuai logika laporan
+            let kategori = "";
+            if (totalBenar >= 8) {
+                kategori = "The Master of Synergy";
+            } else if (totalBenar >= 5) {
+                kategori = "Relationship Builder";
+            } else {
+                kategori = "Trust Bankrupt";
+            }
+
+            // Menghitung durasi pengerjaan dalam satuan detik
+            const durasiDetik = state.startTime ? Math.floor((Date.now() - state.startTime) / 1000) : 0;
+
+            // 2. Susun struktur payload JSON yang 100% cocok dengan GAS API
+            const playerData = {
+                Timestamp: new Date().toISOString(), // Optional, format waktu ISO
+                NIK_Karyawan: state.nik,
+                Nama_Karyawan: state.name,
+                Saldo_Akhir_Trust: state.score,
+                Total_Benar: totalBenar,
+                Kategori_Pencapaian: kategori,
+                Durasi_Detik: durasiDetik,
+                Log_Interaksi_Raw: JSON.stringify(state.answersHistory)
+            };
+
+            // 3. Endpoint URL Web App GAS Anda
+            const scriptURL = "https://script.google.com/macros/s/AKfycbzkUuSGdcNACXfnD0VLLtM6s02YZ8LoT-QJ7a_MXvJsK9XaJek4ffj9uzN1qW7k4IZszg/exec";
+
+            try {
+                // Notifikasi awal (Loading state)
+                showToast("⏳", "Menyimpan data performa ke database...", "#2b3a4a");
+
+                // 4. Eksekusi Request HTTP POST secara Async
+                const response = await fetch(scriptURL, {
+                    method: 'POST',
+                    mode: 'cors',
+                    headers: {
+                        // Bypass CORS preflight via text/plain untuk GAS Web App
+                        'Content-Type': 'text/plain;charset=utf-8' 
+                    },
+                    body: JSON.stringify(playerData)
+                });
+
+                const result = await response.json();
+                
+                if (result.status === "success") {
+                    showToast("✅", "Data berhasil tersimpan di Google Sheets!", "#00e676");
+                    console.log("Data sukses terkirim:", result);
+                } else {
+                    throw new Error(result.message);
+                }
+                
+            } catch (error) {
+                console.error("Gagal mengirim data:", error);
+                showToast("⚠️", "Gagal menyimpan data ke server.", "#ff1744");
+            }
         }
     </script>
 </body>
